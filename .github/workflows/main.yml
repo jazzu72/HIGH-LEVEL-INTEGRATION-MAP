@@ -1,0 +1,100 @@
+name: Nia Secure Pipeline (OIDC + Key Vault)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # REQUIRED for OIDC
+  contents: read
+
+env:
+  AZURE_RESOURCE_GROUP: nia-prod-rg
+  AZURE_KEY_VAULT: nia-prod-vault
+  LOCATION: eastus
+
+jobs:
+  nia-build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------
+      # Azure Login via OIDC (NO SECRETS)
+      # -----------------------------
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # -----------------------------
+      # Pull Secrets from Azure Key Vault
+      # -----------------------------
+      - name: Fetch secrets from Key Vault
+        id: keyvault
+        uses: azure/get-keyvault-secrets@v1
+        with:
+          keyvault: ${{ env.AZURE_KEY_VAULT }}
+          secrets: |
+            AZURE_OPENAI_KEY
+            XAI_GROK_API_KEY
+            SERP_API_KEY
+
+      # -----------------------------
+      # Hardened Environment Variables
+      # -----------------------------
+      - name: Set secure env vars
+        shell: pwsh
+        run: |
+          echo "AZURE_OPENAI_KEY=${{ steps.keyvault.outputs.AZURE_OPENAI_KEY }}" >> $env:GITHUB_ENV
+          echo "XAI_GROK_API_KEY=${{ steps.keyvault.outputs.XAI_GROK_API_KEY }}" >> $env:GITHUB_ENV
+          echo "SERP_API_KEY=${{ steps.keyvault.outputs.SERP_API_KEY }}" >> $env:GITHUB_ENV
+
+      # -----------------------------
+      # Verify Identity (Optional Audit)
+      # -----------------------------
+      - name: Verify Azure identity
+        shell: pwsh
+        run: |
+          az account show
+          az keyvault secret list --vault-name $env:AZURE_KEY_VAULT --maxresults 1
+
+      # -----------------------------
+      # Run Nia AutoBuilder
+      # -----------------------------
+      - name: Run Nia AutoBuilder
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          ./scripts/Invoke-AutoBuild.ps1 `
+            -Mode Production `
+            -EnableVault `
+            -EnableGrantAgent `
+            -BudgetCapUSD 250000 `
+            -DryRun:$false
+
+      # -----------------------------
+      # Optional: Package MSI / ZIP
+      # -----------------------------
+      - name: Package Enterprise Installer
+        shell: pwsh
+        run: |
+          ./installer/build-msi.ps1
+          ./installer/package-release.ps1
+
+      # -----------------------------
+      # Upload Artifacts
+      # -----------------------------
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nia-enterprise-release
+          path: |
+            dist/*.msi
+            dist/*.zip
