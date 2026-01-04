@@ -1,0 +1,10 @@
+GrantAgent
+   │
+   ▼
+Eligibility + Scoring
+   │
+   ▼
+Vault (Governance, Budget, Legal, Accounting)
+   │   ▲
+   │   │
+AutoBuilder (CI/CD, Infra, Packaging, MSI, Agents)
